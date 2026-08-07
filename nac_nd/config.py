@@ -65,3 +65,11 @@ class Config:
     @property
     def base_url(self) -> str:
         return f"https://{self.host}"
+
+    @property
+    def prechange_ui_url(self) -> str:
+        """Nexus Dashboard Pre-Change Analysis page (same as nexus-pcv --output-url)."""
+        return (
+            f"{self.base_url}/appcenter/cisco/nexus-insights/ui/"
+            "#/changeManagement/preChangeAnalysis"
+        )

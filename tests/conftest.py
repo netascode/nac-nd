@@ -11,6 +11,7 @@ import pytest
 
 from nac_nd.client import NDClient
 from nac_nd.config import Config
+from nac_nd.log import configure_logging
 
 Handler = Callable[[httpx.Request], httpx.Response]
 Route = httpx.Response | list[httpx.Response] | Handler
@@ -85,6 +86,11 @@ def make_client(config: Config) -> Iterator[Callable[..., NDClient]]:
     yield factory
     for http in opened:
         http.close()
+
+
+@pytest.fixture(autouse=True)
+def quiet_logging() -> None:
+    configure_logging(verbose=False)
 
 
 @pytest.fixture(autouse=True)

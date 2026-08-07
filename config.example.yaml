@@ -19,5 +19,7 @@ fabrics:
 job_timeout_minutes: 30
 poll_interval: 15
 
-# Default for delta/prechange --detail (none, resources, anomalies, policy-diff, full).
+# Default for `delta --detail` and YAML override for both commands.
+# prechange defaults to `full` when unset; delta defaults to `resources`.
+# Values: none, resources, anomalies, policy-diff, full
 delta_detail: resources

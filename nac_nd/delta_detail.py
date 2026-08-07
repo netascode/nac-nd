@@ -9,6 +9,7 @@ from nac_nd.client import NDClient
 from nac_nd.exceptions import InputError
 
 DEFAULT_DELTA_DETAIL = "resources"
+PRECHANGE_DEFAULT_DETAIL = "full"
 
 DELTA_DETAIL_LEVELS: tuple[str, ...] = (
     "none",

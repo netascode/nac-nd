@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-
 import pytest
 
 from nac_nd.client import (
@@ -89,8 +87,8 @@ def test_each_snapshot_type_is_requested_explicitly(make_client) -> None:
     assert asked == ["online", "prechange"]
 
 
-def test_the_fifty_record_cap_is_reported(make_client, caplog) -> None:
-    """The endpoint caps at 50 records, so unreachable ones are warned about."""
+def test_the_fifty_record_cap_is_reported(make_client) -> None:
+    """The endpoint caps at 50 records, so unreachable ones are collected."""
     records = [
         snapshot(f"s{index}", f"2026-08-07T{index:02d}:00:00Z")
         for index in range(SNAPSHOT_RECORD_CAP)
@@ -102,11 +100,10 @@ def test_the_fifty_record_cap_is_reported(make_client, caplog) -> None:
     lab = Lab({"/api/v1/analyze/fabricSnapshots": json_response(body)})
     client = make_client(lab)
 
-    with caplog.at_level(logging.WARNING):
-        client.list_snapshots("FABRIC-A")
+    client.list_snapshots("FABRIC-A")
 
-    assert "41 more" in caplog.text
-    assert "--since" in caplog.text
+    assert any("41 more" in item for item in client.notices)
+    assert any("--since" in item for item in client.notices)
 
 
 def test_the_date_window_is_passed_through(make_client) -> None:

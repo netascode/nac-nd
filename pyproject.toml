@@ -1,7 +1,7 @@
 [project]
 name = "nac-nd"
 version = "0.1.0"
-description = "Change analysis for Cisco Nexus Dashboard 4.2.1+ using only the GA REST APIs."
+description = "Change analysis for Cisco Nexus Dashboard 4.2.1+."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MPL-2.0" }
@@ -34,10 +34,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/edmoor/nac-nd"
-Repository = "https://github.com/edmoor/nac-nd"
-Documentation = "https://github.com/edmoor/nac-nd#readme"
-Issues = "https://github.com/edmoor/nac-nd/issues"
+Homepage = "https://github.com/netascode/nac-nd"
+Repository = "https://github.com/netascode/nac-nd"
+Documentation = "https://github.com/netascode/nac-nd#readme"
+Issues = "https://github.com/netascode/nac-nd/issues"
 
 [project.scripts]
 nac-nd = "nac_nd.cli:main"

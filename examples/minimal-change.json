@@ -1,0 +1,12 @@
+{
+  "imdata": [
+    {
+      "fvTenant": {
+        "attributes": {
+          "name": "EXAMPLE",
+          "descr": "Minimal sample for nac-nd prechange"
+        }
+      }
+    }
+  ]
+}

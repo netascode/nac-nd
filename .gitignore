@@ -30,6 +30,12 @@ junit.xml
 !.env.example
 nac-nd.yaml
 
+# Local analysis artefacts (may contain TF variables / credentials)
+plan.json
+plan-*.json
+*.tfplan
+approval.txt
+
 # Editors
 .vscode/
 .idea/

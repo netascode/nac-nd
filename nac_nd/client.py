@@ -19,6 +19,7 @@ import httpx
 
 from nac_nd.config import Config
 from nac_nd.exceptions import ApiError, AuthError, InputError, JobError
+from nac_nd.log import is_verbose
 
 logger = logging.getLogger(__name__)
 
@@ -188,12 +189,15 @@ def finished_snapshots(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _warn_on_snapshot_cap(
-    body: dict[str, Any], records: list[dict[str, Any]], snapshot_type: str
+    client: NDClient,
+    body: dict[str, Any],
+    records: list[dict[str, Any]],
+    snapshot_type: str,
 ) -> None:
-    """Warn when the 50-record cap is hiding snapshots."""
+    """Record when the 50-record cap is hiding snapshots."""
     remaining = as_dict(as_dict(body.get("meta")).get("counts")).get("remaining")
     if len(records) >= SNAPSHOT_RECORD_CAP and remaining:
-        logger.warning(
+        client.notice(
             "%s more '%s' snapshot(s) exist but this endpoint returns at most "
             "%d and ignores every paging parameter. Use --since / --until to "
             "reach the older ones.",
@@ -367,12 +371,13 @@ class NDClient:
     def __init__(self, config: Config, *, http: httpx.Client | None = None) -> None:
         self.config = config
         self.token: str | None = None
+        self.notices: list[str] = []
         if http is not None:
             self.client = http
             return
         verify: bool | str = config.ca_bundle or config.verify_ssl
         if not config.verify_ssl and not config.ca_bundle:
-            logger.warning(
+            self.notice(
                 "TLS certificate verification is disabled. Set ND_VERIFY_SSL=true "
                 "and ND_CA_BUNDLE to the cluster's CA in production."
             )
@@ -382,6 +387,14 @@ class NDClient:
 
     def close(self) -> None:
         self.client.close()
+
+    def notice(self, message: str, *args: object) -> None:
+        """Record an operational warning for the result or log it when verbose."""
+        text = message % args if args else message
+        if is_verbose():
+            logger.warning(text)
+        elif text not in self.notices:
+            self.notices.append(text)
 
     def __enter__(self) -> NDClient:
         return self
@@ -418,7 +431,7 @@ class NDClient:
         except ValueError as exc:
             raise AuthError(f"{LOGIN_PATH} returned a non-JSON response.") from exc
         self._apply_token(token_from_auth_response(body))
-        logger.info("Authenticated as %s", self.config.username)
+        logger.debug("Authenticated as %s", self.config.username)
 
     def refresh(self) -> None:
         """Renew the session token, falling back to a full login."""
@@ -523,13 +536,13 @@ class NDClient:
             # An unreadable inventory is not evidence the fabric is wrong, so
             # validation is skipped rather than failed. AuthError is not
             # caught: bad credentials are fatal.
-            logger.warning(
+            self.notice(
                 "Could not read the fabric inventory (%s); skipping fabric validation",
                 exc,
             )
             return
         if not names:
-            logger.warning(
+            self.notice(
                 "No ACI fabrics reported by %s/fabrics; skipping validation",
                 MANAGE,
             )
@@ -568,7 +581,7 @@ class NDClient:
                 params["endDate"] = end_date
             body = self.get_json(f"{ANALYZE}/fabricSnapshots", params=params)
             records = as_list(body.get("snapshots"))
-            _warn_on_snapshot_cap(body, records, snapshot_type)
+            _warn_on_snapshot_cap(self, body, records, snapshot_type)
             for record in records:
                 snapshot_id = str(record.get("snapshotId", ""))
                 if snapshot_id:
@@ -700,7 +713,7 @@ class NDClient:
                     f"Pre-change analysis {job_id} was still '{status}' after "
                     f"{self.config.job_timeout_minutes} minutes."
                 )
-            logger.info("Pre-change analysis %s is %s...", job_id, status or "pending")
+            logger.debug("Pre-change analysis %s is %s...", job_id, status or "pending")
             time.sleep(self.config.poll_interval_seconds)
 
     def delete_prechange_analysis(self, job_id: str) -> None:
@@ -732,7 +745,7 @@ class NDClient:
         job_id = body.get("jobId")
         if not job_id:
             raise JobError("Delta analysis was created but returned no jobId.")
-        logger.info("Delta analysis %s started", job_id)
+        logger.debug("Delta analysis %s started", job_id)
         return str(job_id)
 
     def job_summary(
@@ -781,7 +794,7 @@ class NDClient:
                             "cannot validate a change."
                         )
                     raise JobError(" ".join(parts))
-                logger.info("Delta analysis %s is %s...", job_id, status or "pending")
+                logger.debug("Delta analysis %s is %s...", job_id, status or "pending")
             elif window.missing():
                 raise JobError(
                     f"Delta analysis {job_id} was never reported by "
@@ -790,7 +803,7 @@ class NDClient:
                     "with no entries for a job that does not exist."
                 )
             else:
-                logger.info(
+                logger.debug(
                     "Delta analysis %s not visible yet (%d/%d)...",
                     job_id,
                     window.polls,

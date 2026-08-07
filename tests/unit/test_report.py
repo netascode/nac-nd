@@ -114,7 +114,8 @@ def test_yaml_output_round_trips() -> None:
 def test_text_output_states_the_verdict() -> None:
     text = render(result(), "text")
 
-    assert "FAIL" in text
+    assert "DECISION: FAIL" in text
+    assert "CHANGE APPROVAL REPORT" in text
     assert "critical" in text
 
 
@@ -179,9 +180,72 @@ def test_text_output_includes_delta_detail_compliance_and_warnings() -> None:
     )
 
     assert "error: HTTP 503" in text
-    assert "Compliance:" in text
-    assert "violated_rules: 2" in text
+    assert "Compliance (baseline snapshot)" in text
+    assert "violated: 2" in text
     assert "warning: delta job survived cleanup" in text
+
+
+def test_prechange_text_uses_change_approval_report() -> None:
+    text = render(
+        result(
+            details={
+                "job_id": "abc123",
+                "base_snapshot_id": "snap-1",
+                "prechange_ui_url": (
+                    "https://nd.example.com/appcenter/cisco/nexus-insights/ui/"
+                    "#/changeManagement/preChangeAnalysis"
+                ),
+            },
+            anomaly_summary={
+                "newAnomaliesCount": 2,
+                "clearedAnomaliesCount": 0,
+            },
+            compliance={
+                "scope": "baseline snapshot (before change)",
+                "enforced_rules": 10,
+                "violated_rules": 1,
+                "violating_rules": [
+                    {
+                        "ruleName": "no-open-tenant",
+                        "ruleType": "configuration",
+                        "violationsCount": 1,
+                    }
+                ],
+            },
+            delta_detail={
+                "resources": {
+                    "endpoint": "/deltaAnalysis/resources",
+                    "addedCount": 1,
+                    "removedCount": 0,
+                }
+            },
+            detail_level="full",
+        ),
+        "text",
+    )
+
+    assert "CHANGE APPROVAL REPORT" in text
+    assert "Review in Nexus Dashboard:" in text
+    assert "preChangeAnalysis" in text
+    assert "Change context" in text
+    assert "Impact summary (/deltaAnalysis/summary)" in text
+    assert "no-open-tenant" in text
+    assert "New anomalies" in text
+
+
+def test_delta_text_keeps_compact_format() -> None:
+    text = render(
+        result(
+            command="delta",
+            compliance={"violated_rules": 2},
+            warnings=["acknowledged anomalies included"],
+        ),
+        "text",
+    )
+
+    assert "CHANGE APPROVAL REPORT" not in text
+    assert "Compliance:" in text
+    assert "command: delta" in text
 
 
 def test_markdown_output_includes_compliance_and_warnings() -> None:
@@ -207,7 +271,7 @@ def test_pass_verdict_with_no_severity_rows() -> None:
         "text",
     )
 
-    assert "PASS:" in text
+    assert "DECISION: PASS" in text
     assert "(none reported)" in text
 
 

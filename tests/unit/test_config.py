@@ -30,6 +30,15 @@ def test_the_base_url_is_built_from_the_normalised_host() -> None:
     assert config.base_url == "https://nd.example.com"
 
 
+def test_prechange_ui_url_points_at_the_nd_prechange_page() -> None:
+    config = Config(host="nd.example.com", username="u", password="p")
+
+    assert config.prechange_ui_url == (
+        "https://nd.example.com/appcenter/cisco/nexus-insights/ui/"
+        "#/changeManagement/preChangeAnalysis"
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [("host", ""), ("username", ""), ("password", ""), ("domain", "")],

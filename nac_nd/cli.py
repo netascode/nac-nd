@@ -14,6 +14,10 @@ from dotenv import find_dotenv, load_dotenv
 from typer._click.core import ParameterSource
 
 from nac_nd import __version__
+from nac_nd.approval import (
+    compliance_from_snapshot,
+    prechange_job_details,
+)
 from nac_nd.client import (
     NDClient,
     fabric_name,
@@ -25,6 +29,7 @@ from nac_nd.config import DEFAULT_DOMAIN, Config, normalise_host
 from nac_nd.delta_detail import (
     DEFAULT_DELTA_DETAIL,
     DELTA_DETAIL_LEVELS,
+    PRECHANGE_DEFAULT_DETAIL,
     collect_delta_detail_warnings,
     fetch_delta_details,
     normalize_delta_detail,
@@ -36,6 +41,8 @@ from nac_nd.exceptions import (
     InputError,
     NacNdError,
 )
+from nac_nd.log import configure_logging
+from nac_nd.progress import note
 from nac_nd.redaction import install_redaction_filter
 from nac_nd.report import (
     DEFAULT_FAIL_ON,
@@ -48,6 +55,7 @@ from nac_nd.report import (
     render_multi,
 )
 from nac_nd.settings import bootstrap_settings, configured_fabrics
+from nac_nd.tf_plan import prepare_prechange_content
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +155,12 @@ OutputOpt = Annotated[
     ),
 ]
 VerboseOpt = Annotated[
-    bool, typer.Option("--verbose", "-v", help="Log full detail and tracebacks.")
+    bool,
+    typer.Option(
+        "--verbose",
+        "-v",
+        help="Log each HTTP request and API call.",
+    ),
 ]
 FailOnOpt = Annotated[
     str,
@@ -205,8 +218,8 @@ DetailOpt = Annotated[
         help=(
             "Extra delta detail on prechange and delta beyond severity counts: "
             f"{', '.join(DELTA_DETAIL_LEVELS)}. "
-            f"Default {DEFAULT_DELTA_DETAIL} lists changed resource types only. "
-            "Legacy values 'all' and 'summary' map to full and none."
+            f"Default {PRECHANGE_DEFAULT_DETAIL} on prechange (resources on delta). "
+            f"Legacy values 'all' and 'summary' map to full and none."
         ),
     ),
 ]
@@ -222,15 +235,16 @@ def _apply_legacy_env_aliases() -> None:
 
 
 def _configure_logging(verbose: bool) -> None:
-    root = logging.getLogger()
-    if not root.handlers:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
-        root.addHandler(handler)
-    root.setLevel(logging.DEBUG if verbose else logging.INFO)
-    # Re-installed once the handler exists so the handler carries the filter
-    # too. A filter on the logger alone misses records from child loggers.
-    install_redaction_filter(root)
+    configure_logging(verbose)
+
+
+def _extend_warnings(result: Result, client: NDClient) -> None:
+    if client.notices:
+        result.warnings.extend(client.notices)
+
+
+def _connect_message(config: Config) -> str:
+    return f"Connecting to {config.host} as {config.username}..."
 
 
 def _fail(exc: Exception, verbose: bool) -> typer.Exit:
@@ -283,7 +297,7 @@ def _emit(result: Result, output: str) -> None:
 def _enforce(verdict_result: Result) -> None:
     verdict = verdict_result.verdict
     if verdict is not None and not verdict.passed:
-        raise AnomalyThresholdError(verdict.reason)
+        raise AnomalyThresholdError(f"DECISION: FAIL — {verdict.reason}")
 
 
 def _snapshot_details(label: str, snapshot: dict[str, object]) -> dict[str, object]:
@@ -353,7 +367,10 @@ def prechange(
             # Typer's exists/dir_okay/readable checks exit 2, which is
             # reserved for a failed job. Input is validated below so it
             # exits 4.
-            help="Candidate ACI configuration to analyse (JSON).",
+            help=(
+                "Candidate configuration: Terraform plan JSON "
+                "(terraform show -json) or APIC MO JSON."
+            ),
         ),
     ],
     host: HostOpt = None,
@@ -376,7 +393,7 @@ def prechange(
     since: SinceOpt = None,
     until: UntilOpt = None,
     cleanup: CleanupOpt = False,
-    detail: DetailOpt = DEFAULT_DELTA_DETAIL,
+    detail: DetailOpt = PRECHANGE_DEFAULT_DETAIL,
     output: OutputOpt = "text",
     verify_ssl: VerifyOpt = True,
     ca_bundle: CaBundleOpt = None,
@@ -386,7 +403,12 @@ def prechange(
 ) -> None:
     """Analyse a candidate configuration against a fabric's current state.
 
-    Exits 3 when new anomalies reach the --fail-on threshold.
+    Accepts Terraform plan JSON from `terraform show -json plan.tfplan` as well
+    as APIC managed-object JSON. Terraform plans are converted automatically.
+
+    Writes the change approval report to stdout, then exits 3 when the DECISION
+    is FAIL (new anomalies at or above --fail-on). Use --fail-on none to report
+    without failing CI.
     """
     _configure_logging(verbose)
     try:
@@ -413,11 +435,14 @@ def prechange(
             raise InputError(f"{config_file} cannot be read: {exc.strerror}.") from exc
         if not content.strip():
             raise InputError(f"{config_file} is empty.")
+        content = prepare_prechange_content(content)
+        note(_connect_message(config))
         with NDClient(config) as client:
             client.validate_fabric(config.fabric)
             snapshot = client.resolve_snapshot(
                 config.fabric, base_snapshot, start_date=since, end_date=until
             )
+            note("Submitting pre-change analysis...")
             created = client.create_prechange_analysis(
                 fabric=config.fabric,
                 name=job_name,
@@ -430,15 +455,14 @@ def prechange(
                 raise ApiError(
                     "Nexus Dashboard accepted the upload but returned no jobId."
                 )
-            logger.info("Pre-change analysis %s submitted", job_id)
+            note(f"Waiting for pre-change analysis {job_id}...")
             job = client.wait_prechange_analysis(job_id)
-            # Raises unless the analysis completed. The summary below reads as
-            # all zeros for a job that is still running.
             delta_job_id = prechange_delta_job_id(job)
             summary = client.delta_summary(
                 delta_job_id, include_acknowledged=include_acknowledged
             )
             detail_level = normalize_delta_detail(detail)
+            note("Collecting change approval detail...")
             delta_detail = fetch_delta_details(
                 client,
                 fabric=config.fabric,
@@ -446,24 +470,29 @@ def prechange(
                 detail=detail_level,
                 include_acknowledged=include_acknowledged,
             )
+            compliance = compliance_from_snapshot(client, config.fabric, snapshot)
             result = Result(
                 command="prechange",
                 fabric=config.fabric,
                 name=job_name,
                 details={
+                    "prechange_ui_url": config.prechange_ui_url,
                     "job_id": job_id,
                     "delta_job_id": delta_job_id,
                     **_snapshot_details("base", snapshot),
                     "config_file": str(config_file),
+                    **prechange_job_details(job),
                 },
                 anomaly_summary=summary,
                 delta_detail=delta_detail,
                 detail_level=detail_level,
+                compliance=compliance,
                 verdict=build_verdict(summary, thresholds),
             )
             result.warnings.extend(
                 collect_delta_detail_warnings(delta_detail, anomaly_summary=summary)
             )
+            _extend_warnings(result, client)
             if cleanup:
                 leftover = client.cleanup_prechange(config.fabric, job)
                 if leftover:
@@ -536,6 +565,7 @@ def delta(
             poll_interval=poll_interval,
         )
         job_name = name or _auto_name("delta")
+        note(_connect_message(config))
         with NDClient(config) as client:
             client.validate_fabric(config.fabric)
             prior_snapshot = client.resolve_snapshot(
@@ -545,12 +575,14 @@ def delta(
                 config.fabric, later, start_date=since, end_date=until
             )
             prior_id, later_id = resolve_snapshot_ids(prior_snapshot, later_snapshot)
+            note("Starting delta analysis...")
             job_id = client.create_delta_job(
                 fabric=config.fabric,
                 job_name=job_name,
                 prior_id=prior_id,
                 later_id=later_id,
             )
+            note(f"Waiting for delta analysis {job_id}...")
             # Returns only on COMPLETE, so the summary below is never read
             # from an unfinished job.
             client.wait_delta_job(job_id)
@@ -582,6 +614,7 @@ def delta(
             result.warnings.extend(
                 collect_delta_detail_warnings(delta_detail, anomaly_summary=summary)
             )
+            _extend_warnings(result, client)
             if cleanup:
                 client.remove_delta_jobs(config.fabric, [job_id])
         _emit(result, output)
@@ -666,8 +699,10 @@ def compliance(
             )
             results: list[Result] = []
             failed: list[str] = []
+            note(_connect_message(config))
             with NDClient(config) as client:
                 for name in fabrics:
+                    note(f"Checking compliance for {name}...")
                     client.validate_fabric(name)
                     result, violated = _compliance_result(
                         client,
@@ -676,6 +711,7 @@ def compliance(
                         since=since,
                         until=until,
                     )
+                    _extend_warnings(result, client)
                     results.append(result)
                     if violated:
                         failed.append(name)
@@ -702,8 +738,10 @@ def compliance(
             timeout=timeout,
             poll_interval=poll_interval,
         )
+        note(_connect_message(config))
         with NDClient(config) as client:
             client.validate_fabric(config.fabric)
+            note(f"Checking compliance for {config.fabric}...")
             result, violated = _compliance_result(
                 client,
                 config.fabric,
@@ -711,6 +749,7 @@ def compliance(
                 since=since,
                 until=until,
             )
+            _extend_warnings(result, client)
         _emit(result, output)
         if fail_on_violations and violated:
             raise AnomalyThresholdError(
@@ -756,6 +795,7 @@ def doctor(
             "tls_verification": "on" if verify_ssl or ca_bundle else "OFF",
         }
         warnings: list[str] = []
+        note(_connect_message(config))
         with NDClient(config) as client:
             domains = client.login_domains()
             known = [
@@ -787,6 +827,7 @@ def doctor(
             details["newest_snapshot"] = (
                 snapshots[0].get("collectionTimestamp", "") if snapshots else "(none)"
             )
+            warnings.extend(client.notices)
         _emit(
             Result(
                 command="doctor",

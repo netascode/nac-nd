@@ -9,7 +9,11 @@ from xml.etree import ElementTree as ET  # nosec B405 — emit JUnit XML only, n
 
 import yaml
 
-from nac_nd.delta_detail import DEFAULT_DELTA_DETAIL, render_delta_detail_text
+from nac_nd.delta_detail import (
+    DEFAULT_DELTA_DETAIL,
+    PRECHANGE_DEFAULT_DETAIL,
+    render_delta_detail_text,
+)
 from nac_nd.exceptions import InputError
 
 # The severity vocabulary `/deltaAnalysis/summary` reports, worst first.
@@ -26,6 +30,14 @@ SEVERITIES: tuple[str, ...] = (
 DEFAULT_FAIL_ON: tuple[str, ...] = ("critical", "major")
 
 OUTPUT_FORMATS: tuple[str, ...] = ("text", "json", "yaml", "markdown", "junit")
+
+_PRECHANGE_IMPACT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("New anomalies", "newAnomaliesCount"),
+    ("Cleared anomalies", "clearedAnomaliesCount"),
+    ("Unchanged anomalies", "unchangedAnomaliesCount"),
+    ("Earlier snapshot anomalies", "earlierSnapshotAnomaliesCount"),
+    ("Later snapshot anomalies", "laterSnapshotAnomaliesCount"),
+)
 
 
 def parse_fail_on(value: str) -> tuple[str, ...]:
@@ -177,6 +189,8 @@ def render(result: Result, output: str) -> str:
     if output == "junit":
         return _render_junit(result)
     if output == "text":
+        if result.command == "prechange":
+            return _render_change_approval_text(result)
         return _render_text(result)
     raise InputError(
         f"Unknown output format '{output}'. Choose from: {', '.join(OUTPUT_FORMATS)}."
@@ -269,6 +283,92 @@ def _item(value: Any) -> str:
     if isinstance(value, dict):
         return "  ".join(f"{key}={item}" for key, item in value.items())
     return str(value)
+
+
+def _render_change_approval_text(result: Result) -> str:
+    """Render a change-approval packet suitable for review and sign-off."""
+    lines = [
+        "=" * 78,
+        "CHANGE APPROVAL REPORT — PRE-CHANGE ANALYSIS",
+        "=" * 78,
+        "",
+    ]
+    verdict = result.verdict
+    if verdict is not None:
+        status = "PASS" if verdict.passed else "FAIL"
+        lines.append(f"DECISION: {status} — {verdict.reason}")
+        lines.append("")
+
+    ui_url = result.details.get("prechange_ui_url")
+    if ui_url:
+        lines.extend(["Review in Nexus Dashboard:", f"  {ui_url}", ""])
+
+    lines.append("Change context")
+    context_rows = [
+        ("command", result.command),
+        ("fabric", result.fabric),
+        ("name", result.name),
+    ]
+    context_rows += [(key, str(value)) for key, value in result.details.items()]
+    for key, value in context_rows:
+        if value:
+            lines.append(f"  {key:<22} {value}")
+
+    if result.anomaly_summary:
+        lines.extend(["", "Impact summary (/deltaAnalysis/summary)", ""])
+        for label, field in _PRECHANGE_IMPACT_FIELDS:
+            if field in result.anomaly_summary:
+                lines.append(f"  {label:<28} {result.anomaly_summary[field]}")
+        if verdict is not None:
+            lines.extend(["", "New anomalies by severity:", ""])
+            if verdict.new_by_severity:
+                lines.extend(
+                    f"  {severity:<9} {count}"
+                    for severity, count in verdict.new_by_severity.items()
+                )
+            else:
+                lines.append("  (none reported)")
+
+    if result.compliance:
+        lines.extend(["", "=== Compliance (baseline snapshot) ===", ""])
+        compliance = result.compliance
+        if "error" in compliance:
+            lines.append(f"  error: {compliance['error']}")
+        else:
+            lines.append(f"  scope: {compliance.get('scope', '')}")
+            lines.append(
+                f"  enforced: {compliance.get('enforced_rules', 0)}  "
+                f"violated: {compliance.get('violated_rules', 0)}"
+            )
+            violating = compliance.get("violating_rules") or []
+            if violating:
+                lines.append("  violating rules:")
+                for rule in violating:
+                    if isinstance(rule, dict):
+                        lines.append(
+                            "    "
+                            f"{rule.get('ruleName', '')} "
+                            f"({rule.get('ruleType', '')}) — "
+                            f"{rule.get('violationsCount', 0)} violation(s)"
+                        )
+            else:
+                lines.append("  violating rules: (none)")
+
+    if result.delta_detail:
+        lines.extend(
+            render_delta_detail_text(
+                result.delta_detail,
+                detail_level=result.detail_level or PRECHANGE_DEFAULT_DETAIL,
+                anomaly_summary=result.anomaly_summary or None,
+            )
+        )
+
+    if result.warnings:
+        lines.extend(["", "Warnings", ""])
+        lines.extend(f"  warning: {warning}" for warning in result.warnings)
+
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _render_text(result: Result) -> str:

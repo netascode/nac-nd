@@ -17,8 +17,9 @@ from dotenv import find_dotenv
 from typer.testing import CliRunner
 
 import nac_nd
-from nac_nd.cli import _apply_legacy_env_aliases, app, main
-from nac_nd.exceptions import InputError, JobError
+from nac_nd.cli import _apply_legacy_env_aliases, _enforce, app, main
+from nac_nd.exceptions import AnomalyThresholdError, InputError, JobError
+from nac_nd.report import DEFAULT_FAIL_ON, Result, build_verdict
 
 runner = CliRunner()
 
@@ -34,6 +35,36 @@ ENV = {
 
 def test_exit_codes_for_bad_input_and_failed_jobs_do_not_collide() -> None:
     assert InputError.exit_code != JobError.exit_code
+
+
+def test_enforce_raises_exit_3_when_decision_is_fail() -> None:
+    summary = {
+        "newAnomaliesCount": 2,
+        "anomalyCountBySeverity": [
+            {"severity": "major", "newCount": 2, "clearedCount": 0},
+        ],
+    }
+    result = Result(
+        command="prechange",
+        fabric="FABRIC-A",
+        verdict=build_verdict(summary, DEFAULT_FAIL_ON),
+    )
+
+    with pytest.raises(AnomalyThresholdError) as caught:
+        _enforce(result)
+
+    assert caught.value.exit_code == 3
+    assert str(caught.value).startswith("DECISION: FAIL —")
+
+
+def test_enforce_does_not_raise_when_decision_is_pass() -> None:
+    result = Result(
+        command="prechange",
+        fabric="FABRIC-A",
+        verdict=build_verdict({"newAnomaliesCount": 0}, DEFAULT_FAIL_ON),
+    )
+
+    _enforce(result)
 
 
 def test_a_missing_config_file_exits_4_not_click_s_usage_code(tmp_path: Path) -> None:
