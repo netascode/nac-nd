@@ -1,4 +1,7 @@
-"""Command line interface."""
+"""Command line interface (entry layer).
+
+Typer commands that orchestrate config, client calls, domain modules, and reporting.
+"""
 
 from __future__ import annotations
 
@@ -14,10 +17,6 @@ from dotenv import find_dotenv, load_dotenv
 from typer._click.core import ParameterSource
 
 from nac_nd import __version__
-from nac_nd.approval import (
-    compliance_from_snapshot,
-    prechange_job_details,
-)
 from nac_nd.client import (
     NDClient,
     fabric_name,
@@ -25,13 +24,17 @@ from nac_nd.client import (
     prechange_delta_job_id,
     resolve_snapshot_ids,
 )
+from nac_nd.compliance import (
+    compliance_for_snapshot,
+    prechange_job_details,
+    run_compliance_check,
+    snapshot_details,
+)
 from nac_nd.config import DEFAULT_DOMAIN, Config, normalise_host
-from nac_nd.delta_detail import (
+from nac_nd.delta import (
     DEFAULT_DELTA_DETAIL,
     DELTA_DETAIL_LEVELS,
     PRECHANGE_DEFAULT_DETAIL,
-    collect_delta_detail_warnings,
-    fetch_delta_details,
     normalize_delta_detail,
 )
 from nac_nd.exceptions import (
@@ -42,14 +45,13 @@ from nac_nd.exceptions import (
     NacNdError,
 )
 from nac_nd.log import configure_logging
+from nac_nd.pipeline import finish_delta_analysis
 from nac_nd.progress import note
-from nac_nd.redaction import install_redaction_filter
 from nac_nd.report import (
     DEFAULT_FAIL_ON,
     OUTPUT_FORMATS,
     MultiFabricResult,
     Result,
-    build_verdict,
     parse_fail_on,
     render,
     render_multi,
@@ -66,21 +68,19 @@ APP_HELP = """\
 Change analysis for Cisco Nexus Dashboard 4.2.1+ (GA REST APIs, ACI).
 
 Configuration:
-  Settings come from CLI flags, environment variables, a YAML config file, or
-  a `.env` file in the current working directory (in that order). Copy
-  `config.example.yaml` or `.env.example` to get started; you do not need to
-  `source` either file.
+  ND_HOST                 Nexus Dashboard hostname or IP
+  ND_USER                 Login username
+  ND_PASSWORD             Login password
+  ND_DOMAIN               Login domain
+  ND_FABRIC               Default ACI fabric name
+  ND_VERIFY_SSL           Verify TLS certificate (ND_VERIFY_TLS accepted)
+  ND_CA_BUNDLE            Path to CA bundle
+  ND_JOB_TIMEOUT_MINUTES  Minutes to wait for analysis jobs
+  ND_POLL_INTERVAL        Seconds between job status polls
+  ND_DELTA_DETAIL         Default --detail for prechange and delta
+  ND_CONFIG               Path to YAML config file
 
-  Config file: `--config path`, `ND_CONFIG`, `./nac-nd.yaml`, or
-  `~/.config/nac-nd/config.yaml`
-  Connection: ND_HOST, ND_USER, ND_PASSWORD, ND_DOMAIN, ND_FABRIC
-  Fabrics:    YAML `fabric` or `fabrics`; `compliance --all` checks each
-  Delta:      ND_DELTA_DETAIL or YAML `delta_detail` (prechange/delta only)
-  TLS:        ND_VERIFY_SSL (ND_VERIFY_TLS also accepted), ND_CA_BUNDLE
-  Timing:     ND_JOB_TIMEOUT_MINUTES, ND_POLL_INTERVAL
-
-  Exit codes: 0 ok, 1 error, 2 job failed, 3 threshold/violation, 4 input,
-  5 auth. Run `nac-nd <command> --help` for command options."""
+  Settings load from CLI flags, then environment variables, nac-nd.yaml, or .env."""
 
 app = typer.Typer(
     help=APP_HELP,
@@ -300,62 +300,6 @@ def _enforce(verdict_result: Result) -> None:
         raise AnomalyThresholdError(f"DECISION: FAIL — {verdict.reason}")
 
 
-def _snapshot_details(label: str, snapshot: dict[str, object]) -> dict[str, object]:
-    return {
-        f"{label}_snapshot_id": snapshot.get("snapshotId", ""),
-        f"{label}_collected_at": snapshot.get("collectionTimestamp", ""),
-    }
-
-
-def _compliance_result(
-    client: NDClient,
-    fabric: str,
-    *,
-    snapshot: str | None,
-    since: str | None,
-    until: str | None,
-) -> tuple[Result, int]:
-    details: dict[str, object] = {}
-    timestamp: str | None = None
-    if snapshot:
-        record = client.resolve_snapshot(
-            fabric, snapshot, start_date=since, end_date=until
-        )
-        timestamp = str(record.get("analysisTimestamp", ""))
-        details.update(_snapshot_details("selected", record))
-        details["requested_timestamp"] = timestamp
-    summary = client.compliance_summary(fabric, collection_timestamp=timestamp)
-    rules = client.compliance_rule_details(fabric, collection_timestamp=timestamp)
-    by_status = summary.get("ruleCountByStatus") or {}
-    violated = int(by_status.get("violatedCount", 0) or 0)
-    details["reported_timestamp"] = summary.get("collectionTimestamp", "")
-    result = Result(
-        command="compliance",
-        fabric=fabric,
-        details=details,
-        compliance={
-            "enforced_rules": by_status.get("enforcedCount", 0),
-            "violated_rules": violated,
-            "communication_rules": (summary.get("ruleCountByType") or {}).get(
-                "communication", 0
-            ),
-            "configuration_rules": (summary.get("ruleCountByType") or {}).get(
-                "configuration", 0
-            ),
-            "violating_rules": [
-                {
-                    "ruleName": rule.get("ruleName", ""),
-                    "ruleType": rule.get("ruleType", ""),
-                    "violationsCount": rule.get("violationsCount", 0),
-                }
-                for rule in rules.get("rules") or []
-                if int(rule.get("violationsCount", 0) or 0) > 0
-            ],
-        },
-    )
-    return result, violated
-
-
 # -- commands --------------------------------------------------------------
 
 
@@ -458,39 +402,32 @@ def prechange(
             note(f"Waiting for pre-change analysis {job_id}...")
             job = client.wait_prechange_analysis(job_id)
             delta_job_id = prechange_delta_job_id(job)
-            summary = client.delta_summary(
-                delta_job_id, include_acknowledged=include_acknowledged
-            )
             detail_level = normalize_delta_detail(detail)
             note("Collecting change approval detail...")
-            delta_detail = fetch_delta_details(
+            compliance = compliance_for_snapshot(
                 client,
-                fabric=config.fabric,
-                job_id=delta_job_id,
-                detail=detail_level,
-                include_acknowledged=include_acknowledged,
+                config.fabric,
+                snapshot,
+                scope="baseline snapshot (before change)",
             )
-            compliance = compliance_from_snapshot(client, config.fabric, snapshot)
-            result = Result(
+            result = finish_delta_analysis(
+                client,
                 command="prechange",
                 fabric=config.fabric,
                 name=job_name,
+                job_id=delta_job_id,
+                thresholds=thresholds,
+                detail_level=detail_level,
+                include_acknowledged=include_acknowledged,
                 details={
                     "prechange_ui_url": config.prechange_ui_url,
                     "job_id": job_id,
                     "delta_job_id": delta_job_id,
-                    **_snapshot_details("base", snapshot),
+                    **snapshot_details("base", snapshot),
                     "config_file": str(config_file),
                     **prechange_job_details(job),
                 },
-                anomaly_summary=summary,
-                delta_detail=delta_detail,
-                detail_level=detail_level,
                 compliance=compliance,
-                verdict=build_verdict(summary, thresholds),
-            )
-            result.warnings.extend(
-                collect_delta_detail_warnings(delta_detail, anomaly_summary=summary)
             )
             _extend_warnings(result, client)
             if cleanup:
@@ -586,33 +523,21 @@ def delta(
             # Returns only on COMPLETE, so the summary below is never read
             # from an unfinished job.
             client.wait_delta_job(job_id)
-            summary = client.delta_summary(
-                job_id, include_acknowledged=include_acknowledged
-            )
             detail_level = normalize_delta_detail(detail)
-            delta_detail = fetch_delta_details(
+            result = finish_delta_analysis(
                 client,
-                fabric=config.fabric,
-                job_id=job_id,
-                detail=detail_level,
-                include_acknowledged=include_acknowledged,
-            )
-            result = Result(
                 command="delta",
                 fabric=config.fabric,
                 name=job_name,
+                job_id=job_id,
+                thresholds=thresholds,
+                detail_level=detail_level,
+                include_acknowledged=include_acknowledged,
                 details={
                     "job_id": job_id,
-                    **_snapshot_details("prior", prior_snapshot),
-                    **_snapshot_details("later", later_snapshot),
+                    **snapshot_details("prior", prior_snapshot),
+                    **snapshot_details("later", later_snapshot),
                 },
-                anomaly_summary=summary,
-                delta_detail=delta_detail,
-                detail_level=detail_level,
-                verdict=build_verdict(summary, thresholds),
-            )
-            result.warnings.extend(
-                collect_delta_detail_warnings(delta_detail, anomaly_summary=summary)
             )
             _extend_warnings(result, client)
             if cleanup:
@@ -704,7 +629,7 @@ def compliance(
                 for name in fabrics:
                     note(f"Checking compliance for {name}...")
                     client.validate_fabric(name)
-                    result, violated = _compliance_result(
+                    result, violated = run_compliance_check(
                         client,
                         name,
                         snapshot=snapshot,
@@ -742,7 +667,7 @@ def compliance(
         with NDClient(config) as client:
             client.validate_fabric(config.fabric)
             note(f"Checking compliance for {config.fabric}...")
-            result, violated = _compliance_result(
+            result, violated = run_compliance_check(
                 client,
                 config.fabric,
                 snapshot=snapshot,
@@ -848,7 +773,6 @@ def version() -> None:
 
 
 def main() -> None:
-    install_redaction_filter()
     try:
         remaining = bootstrap_settings()
     except InputError as exc:

@@ -175,14 +175,15 @@ def test_running_without_a_dotenv_does_not_error(
     assert "ND_HOST" not in os.environ
 
 
-def test_root_help_explains_configuration() -> None:
+def test_root_help_lists_configuration_variables() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
     assert "Configuration:" in result.output
-    assert "config.example.yaml" in result.output
+    assert "ND_HOST" in result.output
+    assert "ND_CONFIG" in result.output
     assert "nac-nd.yaml" in result.output
-    assert "compliance --all" in result.output
+    assert ".env" in result.output
     assert "ND_VERIFY_TLS" in result.output
 
 

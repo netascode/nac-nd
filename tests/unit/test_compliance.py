@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from nac_nd.client import check_compliance_timestamp, compliance_timestamp_drift
+from nac_nd.compliance import compliance_for_snapshot, prechange_job_details
 from nac_nd.exceptions import ApiError
 from tests.conftest import Lab, json_response
 
@@ -106,3 +107,88 @@ def test_rule_details_are_verified_too(make_client) -> None:
         client.compliance_rule_details(
             "FABRIC-A", collection_timestamp="2026-08-07T10:39:54Z"
         )
+
+
+def test_prechange_job_details_extracts_known_fields() -> None:
+    job = {
+        "analysisStatus": "completed",
+        "analysisScheduleId": "sched-1",
+        "baseSnapshotId": "snap-1",
+        "uploadedFileName": "plan.json",
+        "analysisSubmissionTime": "2026-08-07T10:00:00Z",
+        "ignored": "",
+    }
+
+    details = prechange_job_details(job)
+
+    assert details == {
+        "job_analysisStatus": "completed",
+        "job_analysisScheduleId": "sched-1",
+        "job_baseSnapshotId": "snap-1",
+        "job_uploadedFileName": "plan.json",
+        "job_analysisSubmissionTime": "2026-08-07T10:00:00Z",
+    }
+
+
+def test_compliance_for_snapshot_returns_violating_rules(make_client) -> None:
+    lab = Lab(
+        {
+            SUMMARY_PATH: json_response(
+                {
+                    "collectionTimestamp": "2026-08-07T10:39:54Z",
+                    "ruleCountByStatus": {
+                        "enforcedCount": 5,
+                        "violatedCount": 1,
+                    },
+                    "ruleCountByType": {
+                        "communication": 2,
+                        "configuration": 3,
+                    },
+                }
+            ),
+            RULES_PATH: json_response(
+                {
+                    "collectionTimestamp": "2026-08-07T10:39:54Z",
+                    "rules": [
+                        {
+                            "ruleName": "rule-a",
+                            "ruleType": "configuration",
+                            "violationsCount": 1,
+                        },
+                        {
+                            "ruleName": "rule-b",
+                            "ruleType": "communication",
+                            "violationsCount": 0,
+                        },
+                    ]
+                }
+            ),
+        }
+    )
+    client = make_client(lab)
+    snapshot = {"analysisTimestamp": "2026-08-07T10:39:54Z"}
+
+    payload = compliance_for_snapshot(
+        client,
+        "FABRIC-A",
+        snapshot,
+        scope="baseline snapshot (before change)",
+    )
+
+    assert payload["violated_rules"] == 1
+    assert payload["scope"] == "baseline snapshot (before change)"
+    assert payload["violating_rules"] == [
+        {
+            "ruleName": "rule-a",
+            "ruleType": "configuration",
+            "violationsCount": 1,
+        }
+    ]
+
+
+def test_compliance_for_snapshot_propagates_api_errors(make_client) -> None:
+    lab = Lab({SUMMARY_PATH: json_response({"message": "boom"}, 500)})
+    client = make_client(lab)
+
+    with pytest.raises(ApiError):
+        compliance_for_snapshot(client, "FABRIC-A", {}, scope="test")

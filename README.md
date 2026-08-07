@@ -2,7 +2,7 @@
 
 > **In development** — install from source today; PyPI release planned.
 
-CLI for change analysis on Cisco ACI fabrics via Nexus Dashboard 4.2.1+ (GA REST APIs). Upload a candidate configuration, compare snapshots, or check compliance — then fail CI when new anomalies breach your threshold.
+CLI for change analysis on Cisco ACI fabrics via Nexus Dashboard 4.2.1+. Upload a candidate configuration, compare snapshots, or check compliance.
 
 **Requirements:** Nexus Dashboard 4.2.1+, Python 3.10+, an ACI fabric registered in Nexus Dashboard.
 
@@ -53,7 +53,6 @@ Config file locations: `--config path`, `ND_CONFIG`, `./nac-nd.yaml`, or `~/.con
 ### doctor — check connectivity
 
 ```bash
-export ND_HOST=nd.example.com ND_USER=admin ND_PASSWORD='...' ND_FABRIC=FABRIC-A
 nac-nd doctor
 ```
 
@@ -64,8 +63,7 @@ Use with [Network as Code](https://netascode.cisco.com) projects: run `terraform
 ```bash
 terraform plan -out=plan.tfplan
 terraform show -json plan.tfplan > plan.json
-nac-nd prechange plan.json --fail-on critical,major > approval.txt
-echo exit code: $?
+nac-nd prechange plan.json
 ```
 
 - **Exit 0** — DECISION: PASS  
@@ -118,13 +116,6 @@ JUnit output: `--output junit` (one test case per `--fail-on` severity for prech
 | 4 | Bad input, config, or configuration rejected by Nexus Dashboard |
 | 5 | Authentication or authorisation failure |
 
-## Limitations
-
-- Snapshot listing returns at most 50 records; use `--since` / `--until` (ISO 8601) for older snapshots.
-- Pre-change analysis creates a snapshot on the fabric that cannot be deleted via the GA API.
-- The Pre-Change UI link opens the job list, not a deep link to a specific job (use `name` / `job_id` from the report to find it).
-- Do not commit Terraform plans or `.env` files — they may contain credentials in variable values.
-
 ## Development
 
 ```bash
@@ -134,8 +125,3 @@ uv run ruff check .
 uv run ruff format --check .
 uv run python -m mypy nac_nd
 ```
-
-## Links
-
-- [Analyze API](https://developer.cisco.com/docs/nexus-dashboard/latest/api-reference-analyze-analyze-overview/)
-- [Manage API](https://developer.cisco.com/docs/nexus-dashboard/latest/api-reference-manage-manage-overview/)

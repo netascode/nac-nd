@@ -9,11 +9,8 @@ from xml.etree import ElementTree as ET  # nosec B405 — emit JUnit XML only, n
 
 import yaml
 
-from nac_nd.delta_detail import (
-    DEFAULT_DELTA_DETAIL,
-    PRECHANGE_DEFAULT_DETAIL,
-    render_delta_detail_text,
-)
+from nac_nd.delta import DEFAULT_DELTA_DETAIL, PRECHANGE_DEFAULT_DETAIL
+from nac_nd.delta_format import render_delta_detail_text
 from nac_nd.exceptions import InputError
 
 # The severity vocabulary `/deltaAnalysis/summary` reports, worst first.
