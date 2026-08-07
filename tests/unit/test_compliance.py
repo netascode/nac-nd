@@ -160,7 +160,7 @@ def test_compliance_for_snapshot_returns_violating_rules(make_client) -> None:
                             "ruleType": "communication",
                             "violationsCount": 0,
                         },
-                    ]
+                    ],
                 }
             ),
         }

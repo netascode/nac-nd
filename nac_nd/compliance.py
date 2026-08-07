@@ -77,9 +77,7 @@ def compliance_for_snapshot(
 ) -> dict[str, Any]:
     """Compliance summary and violated rules at a snapshot's analysis time."""
     timestamp = str(snapshot.get("analysisTimestamp") or "")
-    summary = client.compliance_summary(
-        fabric, collection_timestamp=timestamp or None
-    )
+    summary = client.compliance_summary(fabric, collection_timestamp=timestamp or None)
     rules = client.compliance_rule_details(
         fabric, collection_timestamp=timestamp or None
     )
