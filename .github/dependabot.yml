@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'daily'
+  # uv, not pip: the Python dependencies are locked in uv.lock.
+  - package-ecosystem: 'uv'
+    directory: '/'
+    schedule:
+      interval: 'daily'
+    versioning-strategy: lockfile-only
+    allow:
+      - dependency-type: 'all'

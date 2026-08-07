@@ -1,0 +1,98 @@
+[project]
+name = "nac-nd"
+version = "0.1.0"
+description = "Change analysis for Cisco Nexus Dashboard 4.2.1+ using only the GA REST APIs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MPL-2.0" }
+authors = [
+    { name = "Ed Moore" },
+]
+maintainers = [
+    { name = "Ed Moore" },
+]
+keywords = ["cisco", "nexus-dashboard", "aci", "pre-change", "validation", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "typer>=0.15.0",
+    "httpx>=0.28.1",
+    "pyyaml>=6.0.2",
+    "python-dotenv>=1.0.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/edmoor/nac-nd"
+Repository = "https://github.com/edmoor/nac-nd"
+Documentation = "https://github.com/edmoor/nac-nd#readme"
+Issues = "https://github.com/edmoor/nac-nd/issues"
+
+[project.scripts]
+nac-nd = "nac_nd.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "types-pyyaml>=6.0.12",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nac_nd"]
+
+[tool.hatch.build.targets.sdist]
+include = ["nac_nd", "README.md", "pyproject.toml"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["nac_nd"]
+omit = ["*/__main__.py"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+# Typer resolves parameter annotations at runtime to build the CLI, and it
+# recognises `Optional[str]` where a PEP 604 `str | None` is not reliably
+# detected as optional on Python 3.10. The annotations stay as they are.
+ignore = ["UP007", "UP045"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nac_nd"]
+
+[tool.mypy]
+python_version = "3.10"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_configs = true
+warn_return_any = true
+strict_optional = true
+ignore_missing_imports = true

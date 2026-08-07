@@ -1,0 +1,23 @@
+# nac-nd YAML configuration (safe to commit).
+#
+# Copy to `nac-nd.yaml` or `~/.config/nac-nd/config.yaml`, or pass
+# `--config /path/to/this/file`. Keep secrets in `.env` or the environment:
+# ND_USER and ND_PASSWORD only (see `.env.example`).
+
+host: nd.example.com
+domain: DefaultAuth
+verify_ssl: true
+
+# Default fabric when a command needs one and --fabric is omitted.
+fabric: FABRIC-A
+
+# Every fabric `compliance --all` checks (defaults to [fabric] when omitted).
+fabrics:
+  - FABRIC-A
+  - FABRIC-B
+
+job_timeout_minutes: 30
+poll_interval: 15
+
+# Default for delta/prechange --detail (none, resources, anomalies, policy-diff, full).
+delta_detail: resources

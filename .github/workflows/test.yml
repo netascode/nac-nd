@@ -1,0 +1,123 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+# The group uses a literal prefix rather than github.workflow, which resolves
+# to the calling workflow's name when this file is reused.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # -c pyproject.toml is required: without it bandit silently ignores
+      # [tool.bandit]. The toml extra supplies the pyproject config reader.
+      - name: Run bandit security scan
+        run: >
+          uvx --from "bandit[toml]" bandit -c pyproject.toml -r nac_nd/ -ll
+          -f json -o bandit-security-report.json
+
+      - name: Upload security report
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: bandit-security-report
+          path: bandit-security-report.json
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Ruff lint
+        run: uv run ruff check --output-format=github .
+
+      - name: Ruff format
+        run: uv run ruff format --check --diff .
+
+      - name: Mypy
+        run: uv run mypy nac_nd
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      # uv resolves any interpreter satisfying requires-python unless pinned,
+      # so assert the matrix is testing what it claims to test.
+      - name: Verify interpreter
+        run: |
+          uv run python -c "
+          import sys
+          want = '${{ matrix.python }}'
+          got = '.'.join(str(p) for p in sys.version_info[:2])
+          assert got == want, f'expected Python {want}, got {got}'
+          print(f'Python {got}')
+          "
+
+      # --cov-fail-under is a floor, not a target. Raise it as the suite grows.
+      - name: Test
+        run: >
+          uv run pytest
+          --cov --cov-report=term-missing --cov-report=xml
+          --cov-fail-under=75
+
+      - name: Upload coverage
+        if: matrix.python == '3.13'
+        uses: actions/upload-artifact@v6
+        with:
+          name: coverage
+          path: coverage.xml

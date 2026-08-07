@@ -1,0 +1,39 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Test and type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit.xml
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+nac-nd.yaml
+
+# Editors
+.vscode/
+.idea/
+.*.swp
+
+# macOS
+.DS_Store
